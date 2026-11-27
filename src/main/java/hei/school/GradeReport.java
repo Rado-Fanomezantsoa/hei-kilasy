@@ -2,9 +2,7 @@ package hei.school;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.sql.Date;
 import java.sql.Timestamp;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,12 +40,12 @@ public class GradeReport {
         int graded = 0;
         for (Map<String, Object> row : rows) {
             Map<String, Object> line = new LinkedHashMap<>();
-            LocalDate deadline = ((Date) row.get("deadline")).toLocalDate();
+            LocalDateTime deadline = ((Timestamp) row.get("deadline")).toLocalDateTime();
             line.put("exercise", row.get("title"));
             line.put("deadline", deadline);
 
             if (row.get("submission_id") == null) {
-                if (deadline.isBefore(LocalDate.now())) {
+                if (deadline.isBefore(LocalDateTime.now())) {
                     line.put("status", "NON RENDU");
                 } else {
                     line.put("status", "À RENDRE");
@@ -56,18 +54,21 @@ public class GradeReport {
             } else {
                 LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
                 line.put("submittedAt", submittedAt);
-                line.put("late", submittedAt.toLocalDate().isAfter(deadline));
+                GradeCalculator.Result grade = row.get("raw_points") == null ? null
+                        : GradeCalculator.calculate((BigDecimal) row.get("raw_points"),
+                                (BigDecimal) row.get("max_points"), deadline, submittedAt);
+                line.put("late", GradeCalculator.lateDays(deadline, submittedAt) > 0);
                 if (row.get("raw_points") == null) {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
-                    BigDecimal raw = (BigDecimal) row.get("raw_points");
-                    BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
                     line.put("status", "CORRIGÉ");
-                    line.put("grade", grade);
+                    line.put("rawGrade", grade.rawGrade());
+                    line.put("grade", grade.grade());
+                    line.put("lateDays", grade.lateDays());
+                    line.put("penaltyPercent", grade.penaltyPercent());
                     line.put("feedback", row.get("feedback"));
-                    total = total.add(grade);
+                    total = total.add(grade.grade());
                     graded++;
                 }
             }

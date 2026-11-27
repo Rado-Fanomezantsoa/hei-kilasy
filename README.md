@@ -51,8 +51,10 @@ Create an exercise:
 ```bash
 curl -X POST http://localhost:8080/exercises \
   -H "Content-Type: application/json" \
-  -d '{"title": "Recherche dichotomique", "maxPoints": 20, "deadline": "2027-03-01", "teacherId": 1}'
+  -d '{"title": "Recherche dichotomique", "maxPoints": 20, "deadline": "2027-03-01T23:59:59", "teacherId": 1}'
 ```
+
+The deadline accepts an ISO local date-time (`AAAA-MM-JJTHH:MM:SS`). For backward compatibility, a date-only value (`AAAA-MM-JJ`) is also accepted and means the end of that day.
 
 Submit an exercise:
 
@@ -81,5 +83,6 @@ curl http://localhost:8080/exports/grades.csv
 
 - A submission contains code, a link to a GitHub repository, or both.
 - A student can only submit once per exercise.
-- A submission sent after the deadline day is marked as late.
+- A submission sent after its exact deadline time is marked as late. Each started 24-hour period of delay deducts 10% of the grade, up to 50%.
 - Points are entered on the exercise's scale (10, 20, 40…) and converted to a grade out of 20.
+- The raw grade and the penalized grade are rounded to one decimal using HALF_UP; the penalized grade is used in correction, transcripts, averages, and CSV exports.

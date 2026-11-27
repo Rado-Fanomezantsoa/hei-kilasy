@@ -1,8 +1,8 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -58,9 +58,10 @@ public class SubmissionController {
             return ResponseEntity.status(409).body(Map.of("error", "Cet étudiant a déjà soumis cet exercice"));
         }
 
-        LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
+        LocalDateTime deadline = ((Timestamp) exercises.get(0).get("deadline")).toLocalDateTime();
         LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        int lateDays = GradeCalculator.lateDays(deadline, now);
+        boolean late = lateDays > 0;
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -71,6 +72,7 @@ public class SubmissionController {
         result.put("id", submissionId);
         result.put("submittedAt", now);
         result.put("late", late);
+        result.put("lateDays", lateDays);
         result.put("message", late ? "Soumission enregistrée, mais en retard" : "Soumission enregistrée");
         return ResponseEntity.status(201).body(result);
     }
@@ -84,8 +86,11 @@ public class SubmissionController {
             return ResponseEntity.status(404).body(Map.of("error", "Soumission introuvable"));
         }
         Map<String, Object> row = rows.get(0);
-        LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+        LocalDateTime deadline = ((Timestamp) row.get("deadline")).toLocalDateTime();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
+        GradeCalculator.Result grade = row.get("raw_points") == null ? null
+                : GradeCalculator.calculate((BigDecimal) row.get("raw_points"),
+                        (BigDecimal) row.get("max_points"), deadline, submittedAt);
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", row.get("id"));
@@ -94,12 +99,14 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
-        if (row.get("raw_points") != null) {
+        result.put("late", GradeCalculator.lateDays(deadline, submittedAt) > 0);
+        if (grade != null) {
             double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
             result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            result.put("rawGrade", grade.rawGrade());
+            result.put("grade", grade.grade());
+            result.put("lateDays", grade.lateDays());
+            result.put("penaltyPercent", grade.penaltyPercent());
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -110,7 +117,10 @@ public class SubmissionController {
         if (body.get("points") == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "points est obligatoire"));
         }
-        double points = ((Number) body.get("points")).doubleValue();
+        if (!(body.get("points") instanceof Number pointValue)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "points doit être un nombre"));
+        }
+        BigDecimal requestedPoints = new BigDecimal(pointValue.toString());
         String feedback = (String) body.get("feedback");
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -122,20 +132,19 @@ public class SubmissionController {
             return ResponseEntity.status(404).body(Map.of("error", "Soumission introuvable"));
         }
         Map<String, Object> row = rows.get(0);
-        double max = ((BigDecimal) row.get("max_points")).doubleValue();
-        if (points < 0 || points > max) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Les points doivent être entre 0 et " + max));
+        BigDecimal maxPoints = (BigDecimal) row.get("max_points");
+        if (requestedPoints.signum() < 0 || requestedPoints.compareTo(maxPoints) > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Les points doivent être entre 0 et " + maxPoints));
         }
+        BigDecimal points = requestedPoints.setScale(2, RoundingMode.HALF_UP);
 
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
-        LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+        LocalDateTime deadline = ((Timestamp) row.get("deadline")).toLocalDateTime();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        GradeCalculator.Result calculatedGrade = GradeCalculator.calculate(points, maxPoints, deadline, submittedAt);
+        boolean late = calculatedGrade.lateDays() > 0;
 
         // notify the student by email
         String fullName = (String) row.get("full_name");
@@ -146,7 +155,11 @@ public class SubmissionController {
         message.setTo((String) row.get("email"));
         message.setSubject("Kilasy : nouvelle note pour " + title);
         String text = "Bonjour " + firstName + ",\n\n"
-                + "Ta note pour « " + title + " » est disponible : " + grade + "/20.\n";
+                + "Ta note pour « " + title + " » est disponible : " + calculatedGrade.grade() + "/20.\n";
+        if (calculatedGrade.penaltyPercent() > 0) {
+            text += "Note brute : " + calculatedGrade.rawGrade() + "/20 ; pénalité de retard : "
+                    + calculatedGrade.penaltyPercent() + " %.\n";
+        }
         if (feedback != null && !feedback.isBlank()) {
             text += "\nCommentaire de l'enseignant : " + feedback + "\n";
         }
@@ -158,9 +171,12 @@ public class SubmissionController {
         Map<String, Object> result = new HashMap<>();
         result.put("id", id);
         result.put("rawPoints", points);
-        result.put("maxPoints", max);
-        result.put("grade", grade);
+        result.put("maxPoints", maxPoints);
+        result.put("rawGrade", calculatedGrade.rawGrade());
+        result.put("grade", calculatedGrade.grade());
         result.put("late", late);
+        result.put("lateDays", calculatedGrade.lateDays());
+        result.put("penaltyPercent", calculatedGrade.penaltyPercent());
         result.put("feedback", feedback);
         return ResponseEntity.ok(result);
     }

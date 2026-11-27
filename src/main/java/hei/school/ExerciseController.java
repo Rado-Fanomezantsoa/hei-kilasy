@@ -1,6 +1,10 @@
 package hei.school;
 
+import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +33,7 @@ public class ExerciseController {
             e.setTitle(rs.getString("title"));
             e.setDescription(rs.getString("description"));
             e.setMaxPoints(rs.getDouble("max_points"));
-            e.setDeadline(rs.getDate("deadline").toLocalDate());
+            e.setDeadline(rs.getTimestamp("deadline").toLocalDateTime());
             return e;
         });
     }
@@ -43,7 +47,7 @@ public class ExerciseController {
             e.setTitle(rs.getString("title"));
             e.setDescription(rs.getString("description"));
             e.setMaxPoints(rs.getDouble("max_points"));
-            e.setDeadline(rs.getDate("deadline").toLocalDate());
+            e.setDeadline(rs.getTimestamp("deadline").toLocalDateTime());
             return e;
         }, id);
         if (found.isEmpty()) {
@@ -59,15 +63,23 @@ public class ExerciseController {
             return ResponseEntity.badRequest().body(Map.of("error", "Le titre est obligatoire"));
         }
         if (body.get("deadline") == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
+            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJTHH:MM:SS)"));
         }
-        LocalDate deadline;
+        if (!(body.get("deadline") instanceof String deadlineValue)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJTHH:MM:SS)"));
+        }
+        LocalDateTime deadline;
         try {
-            deadline = LocalDate.parse((String) body.get("deadline"));
-        } catch (Exception ex) {
-            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
+            try {
+                deadline = LocalDateTime.parse(deadlineValue);
+            } catch (DateTimeParseException ex) {
+                deadline = LocalDate.parse(deadlineValue)
+                        .atTime(LocalTime.of(23, 59, 59, 999_999_000));
+            }
+        } catch (DateTimeParseException ex) {
+            return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJTHH:MM:SS)"));
         }
-        if (deadline.isBefore(LocalDate.now())) {
+        if (deadline.isBefore(LocalDateTime.now())) {
             return ResponseEntity.badRequest().body(Map.of("error", "L'échéance doit être dans le futur"));
         }
         double maxPoints = 20;
@@ -85,7 +97,7 @@ public class ExerciseController {
 
         jdbcTemplate.update(
                 "INSERT INTO exercise (teacher_id, title, description, max_points, deadline) VALUES (?, ?, ?, ?, ?)",
-                teacherId, title, body.get("description"), maxPoints, java.sql.Date.valueOf(deadline));
+                teacherId, title, body.get("description"), maxPoints, Timestamp.valueOf(deadline));
         Long id = jdbcTemplate.queryForObject("SELECT max(id) FROM exercise", Long.class);
 
         Map<String, Object> result = new HashMap<>();

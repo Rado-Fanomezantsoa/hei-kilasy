@@ -1,6 +1,6 @@
 package hei.school;
 
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 public class Exercise {
 
@@ -9,7 +9,7 @@ public class Exercise {
     private String title;
     private String description;
     private double maxPoints;
-    private LocalDate deadline;
+    private LocalDateTime deadline;
 
     public Long getId() {
         return id;
@@ -51,11 +51,11 @@ public class Exercise {
         this.maxPoints = maxPoints;
     }
 
-    public LocalDate getDeadline() {
+    public LocalDateTime getDeadline() {
         return deadline;
     }
 
-    public void setDeadline(LocalDate deadline) {
+    public void setDeadline(LocalDateTime deadline) {
         this.deadline = deadline;
     }
 }

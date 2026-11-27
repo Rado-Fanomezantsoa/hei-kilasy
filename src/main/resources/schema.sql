@@ -23,9 +23,16 @@ CREATE TABLE IF NOT EXISTS exercise
     title       VARCHAR(200) NOT NULL,
     description TEXT,
     max_points  NUMERIC(5, 2) NOT NULL DEFAULT 20,
-    deadline    DATE         NOT NULL,
+    deadline    TIMESTAMP    NOT NULL,
     created_at  TIMESTAMP    NOT NULL DEFAULT now()
 );
+
+ALTER TABLE exercise
+    ALTER COLUMN deadline TYPE TIMESTAMP
+    USING CASE
+        WHEN pg_typeof(deadline)::text = 'date' THEN deadline::date + TIME '23:59:59.999999'
+        ELSE deadline::timestamp
+    END;
 
 CREATE TABLE IF NOT EXISTS submission
 (
